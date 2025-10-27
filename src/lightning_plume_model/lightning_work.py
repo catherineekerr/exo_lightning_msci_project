@@ -418,146 +418,166 @@ def stepgrow(
         print("Ns", Ns)
         print("Ms", Ms)
 
-    for s in range(len(n0s)):
+    for s in range(sim_params.n_bins):
         Nsnew[s] = Ns[s]
         Msnew[s] = Ms[s]
 
-    for i in range(len(n0s)):
-        for j in range(len(n0s)):
-            if i >= j:
-                lambdaij = min(
-                    Eij[i, j]
-                    * np.pi
-                    * (r0s[i] ** 2 + r0s[j] ** 2)
-                    * vrel[i, j]
-                    * Ns[j]
-                    * delt,
-                    1.0,
-                )
-                Nsnew[j] = Nsnew[j] - lambdaij * Ns[i]
-                Msnew[j] = Msnew[j] - lambdaij * Ns[i] * mmean[j]
-                Msnew[i] = Msnew[i] + lambdaij * Ns[i] * mmean[j]
-                rx = (binbounds[i + 1] ** 3 - r0s[j] ** 3) ** (1 / 3.0)
+    # Create arrays for i,j combinations
+    i_idx, j_idx = np.tril_indices(sim_params.n_bins)
 
-                if upbos[i] >= binbounds[i + 1]:
-                    rxx = binbounds[i + 1]
-                    Nxx = (
-                        n0s[i] * (rxx - rx)
-                        - slopes[i] * r0s[i] * (rxx - rx)
-                        + slopes[i] * (rxx - rx) * (rxx + rx) / 2.0
-                    )
-                    Mxx = (np.pi * rho / 3.0) * (rxx**4 - rx**4) * (
-                        n0s[i] - slopes[i] * r0s[i]
-                    ) + (4 * np.pi * rho / 15.0) * slopes[i] * (rxx**5 - rx**5)
-                elif upbos[i] > rx:
-                    rxx = upbos[i] + 0.0
-                    Nxx = (
-                        n0s[i] * (rxx - rx)
-                        - slopes[i] * r0s[i] * (rxx - rx)
-                        + slopes[i] * (rxx - rx) * (rxx + rx) / 2.0
-                    )
-                    Mxx = (np.pi * rho / 3.0) * (rxx**4 - rx**4) * (
-                        n0s[i] - slopes[i] * r0s[i]
-                    ) + (4 * np.pi * rho / 15.0) * slopes[i] * (rxx**5 - rx**5)
-                else:
-                    Nxx = 0.0
-                    Mxx = 0.0
+    # Calculate lambdaij matrix
+    lambdaij = np.minimum(
+        Eij[i_idx, j_idx]
+        * np.pi
+        * (r0s[i_idx] ** 2 + r0s[j_idx] ** 2)
+        * vrel[i_idx, j_idx]
+        * Ns[j_idx]
+        * delt,
+        1.0,
+    )
 
-                if (i + 1) < len(n0s):
-                    Msnew[i + 1] = (
-                        Msnew[i + 1] + Mxx * lambdaij + mmean[j] * Nxx * lambdaij
-                    )
-                    Msnew[i] = Msnew[i] - Mxx * lambdaij - mmean[j] * Nxx * lambdaij
-                    Nsnew[i + 1] = Nsnew[i + 1] + Nxx * lambdaij
-                    Nsnew[i] = Nsnew[i] - Nxx * lambdaij
+    # Update Nsnew and Msnew for j indices
+    np.add.at(Nsnew, j_idx, -lambdaij * Ns[i_idx])
+    np.add.at(Msnew, j_idx, -lambdaij * Ns[i_idx] * mmean[j_idx])
+
+    # Update Msnew for i indices
+    np.add.at(Msnew, i_idx, lambdaij * Ns[i_idx] * mmean[j_idx])
+
+    # Calculate rx array
+    rx = (binbounds[i_idx + 1] ** 3 - r0s[j_idx] ** 3) ** (1 / 3.0)
+
+    # Calculate conditions for rxx
+    full_bin = upbos[i_idx] >= binbounds[i_idx + 1]
+    partial_bin = upbos[i_idx] > rx
+
+    # Initialize rxx, Nxx, Mxx arrays
+    rxx = np.zeros_like(rx)
+    rxx[full_bin] = binbounds[i_idx[full_bin] + 1]
+    rxx[partial_bin] = upbos[i_idx[partial_bin]]
+
+    # Calculate Nxx and Mxx where applicable
+    valid_bins = full_bin | partial_bin
+    Nxx = np.zeros_like(rx)
+    Mxx = np.zeros_like(rx)
+
+    # Update for valid bins
+    if np.any(valid_bins):
+        Nxx[valid_bins] = (
+            n0s[i_idx[valid_bins]] * (rxx[valid_bins] - rx[valid_bins])
+            - slopes[i_idx[valid_bins]]
+            * r0s[i_idx[valid_bins]]
+            * (rxx[valid_bins] - rx[valid_bins])
+            + slopes[i_idx[valid_bins]]
+            * (rxx[valid_bins] - rx[valid_bins])
+            * (rxx[valid_bins] + rx[valid_bins])
+            / 2.0
+        )
+
+        Mxx[valid_bins] = (np.pi * rho / 3.0) * (
+            rxx[valid_bins] ** 4 - rx[valid_bins] ** 4
+        ) * (
+            n0s[i_idx[valid_bins]] - slopes[i_idx[valid_bins]] * r0s[i_idx[valid_bins]]
+        ) + (4 * np.pi * rho / 15.0) * slopes[i_idx[valid_bins]] * (
+            rxx[valid_bins] ** 5 - rx[valid_bins] ** 5
+        )
+
+    # Update next bin values where i+1 exists
+    next_bin_mask = i_idx + 1 < sim_params.n_bins
+    if np.any(next_bin_mask):
+        i_next = i_idx[next_bin_mask]
+        lambda_next = lambdaij[next_bin_mask]
+        Nxx_next = Nxx[next_bin_mask]
+        Mxx_next = Mxx[next_bin_mask]
+        mmean_j = mmean[j_idx[next_bin_mask]]
+
+        np.add.at(
+            Msnew, i_next + 1, Mxx_next * lambda_next + mmean_j * Nxx_next * lambda_next
+        )
+        np.add.at(
+            Msnew, i_next, -(Mxx_next * lambda_next + mmean_j * Nxx_next * lambda_next)
+        )
+        np.add.at(Nsnew, i_next + 1, Nxx_next * lambda_next)
+        np.add.at(Nsnew, i_next, -Nxx_next * lambda_next)
 
     if showdetails == 1:
         print("Nsnew", Nsnew)
         print("Msnew", Msnew)
 
-    for s in range(len(n0s)):
-        R2 = 0.5 * (binbounds[s + 1] ** 2 - binbounds[s] ** 2)
-        R4 = 0.25 * (binbounds[s + 1] ** 4 - binbounds[s] ** 4)
-        R5 = 0.2 * (binbounds[s + 1] ** 5 - binbounds[s] ** 5)
-        n0snewtest = Nsnew[s] / (binbounds[s + 1] - binbounds[s])
-        slopesnewtest = (
-            3 * (binbounds[s + 1] - binbounds[s]) * Msnew[s] / (4 * rho * np.pi)
-            - Nsnew[s] * R4
-        ) / ((binbounds[s + 1] - binbounds[s]) * R5 - R2 * R4)
-        ncrit = n0snewtest + slopesnewtest * (binbounds[s + 1] - r0s[s])
+    # Pre-compute arrays for all bins at once
+    R2 = 0.5 * (binbounds[1:] ** 2 - binbounds[:-1] ** 2)
+    R4 = 0.25 * (binbounds[1:] ** 4 - binbounds[:-1] ** 4)
+    R5 = 0.2 * (binbounds[1:] ** 5 - binbounds[:-1] ** 5)
 
-        if (Nsnew[s] <= 0) or (Msnew[s] <= 0):
-            upbos[s] = binbounds[s]
-            slopesnew[s] = 0.0
-            n0snew[s] = 0.0
-        elif ncrit >= 0:
-            n0snew[s] = n0snewtest
-            slopesnew[s] = slopesnewtest
-            upbos[s] = binbounds[s + 1]
-        else:
+    # Initialize output arrays
+    n0snew = np.zeros(sim_params.n_bins)
+    slopesnew = np.zeros(sim_params.n_bins)
+    upbos = np.copy(binbounds[:-1])  # Default to lower bounds
+
+    # Calculate initial test values
+    bin_widths = binbounds[1:] - binbounds[:-1]
+    n0snewtest = Nsnew / bin_widths
+    slopesnewtest = (3 * bin_widths * Msnew / (4 * rho * np.pi) - Nsnew * R4) / (
+        bin_widths * R5 - R2 * R4
+    )
+    ncrit = n0snewtest + slopesnewtest * (binbounds[1:] - r0s)
+
+    # Handle simple cases with vectorized operations
+    valid_bins = (Nsnew > 0) & (Msnew > 0)
+    positive_ncrit = valid_bins & (ncrit >= 0)
+
+    # Set values for positive ncrit cases
+    n0snew[positive_ncrit] = n0snewtest[positive_ncrit]
+    slopesnew[positive_ncrit] = slopesnewtest[positive_ncrit]
+    upbos[positive_ncrit] = binbounds[1:][positive_ncrit]
+
+    # Handle complex cases that need root finding
+    complex_cases = valid_bins & ~positive_ncrit
+    if np.any(complex_cases):
+        for s in np.where(complex_cases)[0]:
             bquar = binbounds[s]
             Nquar = Nsnew[s]
             Mquar = 3.0 * Msnew[s] / (4.0 * rho * np.pi)
+
+            # Find roots
             uarray = np.roots(
                 [
                     1.0,
                     2.0 * bquar,
-                    3.0 * (bquar**2),
-                    4.0 * (bquar**3) - 10.0 * Mquar / Nquar,
+                    3.0 * bquar**2,
+                    4.0 * bquar**3 - 10.0 * Mquar / Nquar,
                 ]
             )
-            uquar = binbounds[s]
-            for tt in range(len(uarray)):
-                uposs = uarray[tt]
-                if uposs.real >= binbounds[s] and uposs.real < binbounds[s + 1]:
-                    if abs(uposs.imag) < 10**-10:
-                        if showdetails == 1:
-                            print(s, uposs)
-                        uquar = uposs.real + 0.0
-            upbos[s] = uquar
-            if showdetails == 1:
-                print(s, upbos[s])
-            if upbos[s] > binbounds[s]:
-                R2 = 0.5 * (upbos[s] ** 2 - binbounds[s] ** 2)
-                R4 = 0.25 * (upbos[s] ** 4 - binbounds[s] ** 4)
-                R5 = 0.2 * (upbos[s] ** 5 - binbounds[s] ** 5)
-                n0snewerm = Nsnew[s] / (upbos[s] - binbounds[s])
-                if showdetails == 1:
-                    print(s, R2, R4, R5, n0snewerm)
-                    print(
-                        s,
-                        (
-                            (3 * (upbos[s] - binbounds[s]) * Msnew[s])
-                            / (4 * rho * np.pi)
-                        ),
-                        Nsnew[s] * R4,
-                        ((upbos[s] - binbounds[s]) * R5),
-                        (R2 * R4),
+
+            # Find valid root in range
+            valid_roots = uarray[
+                (uarray.real >= binbounds[s])
+                & (uarray.real < binbounds[s + 1])
+                & (abs(uarray.imag) < 1e-10)
+            ]
+
+            if len(valid_roots) > 0:
+                uquar = float(valid_roots[0].real)
+                upbos[s] = uquar
+
+                if uquar > binbounds[s]:
+                    R4_s = 0.25 * (uquar**4 - binbounds[s] ** 4)
+                    n0snewerm = Nsnew[s] / (uquar - binbounds[s])
+
+                    # Optimized slope calculation
+                    numer = (
+                        (3 * (uquar - binbounds[s]) * Msnew[s]) / (4 * rho * np.pi)
+                    ) - Nsnew[s] * R4_s
+                    denom = (
+                        3.0 * uquar**2
+                        + 4.0 * uquar * binbounds[s]
+                        + 3.0 * binbounds[s] ** 2
+                    ) * (uquar - binbounds[s]) ** 4
+                    slopesnew[s] = 40.0 * numer / denom
+
+                    n0snew[s] = (
+                        n0snewerm
+                        + (r0s[s] - (binbounds[s] + uquar) / 2.0) * slopesnew[s]
                     )
-                slopesnew[s] = (
-                    (
-                        ((3 * (upbos[s] - binbounds[s]) * Msnew[s]) / (4 * rho * np.pi))
-                        - Nsnew[s] * R4
-                    )
-                    * 40.0
-                    / (
-                        (
-                            3.0 * (upbos[s] * upbos[s])
-                            + 4.0 * (upbos[s] * binbounds[s])
-                            + 3.0 * (binbounds[s] * binbounds[s])
-                        )
-                        * (upbos[s] - binbounds[s]) ** 4
-                    )
-                )
-                n0snew[s] = (
-                    n0snewerm
-                    + (r0s[s] - (binbounds[s] + upbos[s]) / 2.0) * slopesnew[s]
-                )
-                if showdetails == 1:
-                    print(s, n0snew[s], slopesnew[s])
-            else:
-                slopesnew[s] = 0.0
-                n0snew[s] = 0.0
 
     if showdetails == 1:
         print("n0snew", n0snew)

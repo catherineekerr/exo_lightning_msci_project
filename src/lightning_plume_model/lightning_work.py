@@ -10,7 +10,7 @@ Only changes from original:
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Tuple, Union
+from typing import Tuple, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -322,6 +322,7 @@ def upward_wind_gradient(
 
 
 def stepgrow(
+    sim_params: SimulationParameters,
     n0s: np.ndarray,
     slopes: np.ndarray,
     binbounds: np.ndarray,
@@ -332,65 +333,86 @@ def stepgrow(
     delt: float,
     showdetails: int = 0,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Particle growth through collisions - COPIED EXACTLY FROM ORIGINAL."""
-    r0s = np.zeros(len(n0s))
-    Ns = np.zeros(len(n0s))
-    Ms = np.zeros(len(n0s))
-    n0snew = np.zeros(len(n0s))
-    slopesnew = np.zeros(len(n0s))
-    Nsnew = np.zeros(len(n0s))
-    Msnew = np.zeros(len(n0s))
-    mmean = np.zeros(len(n0s))
-    upbos = np.zeros(len(n0s))
+    """Particle growth through collisions."""
+    r0s = np.zeros(sim_params.n_bins)
+    Ns = np.zeros(sim_params.n_bins)
+    Ms = np.zeros(sim_params.n_bins)
+    n0snew = np.zeros(sim_params.n_bins)
+    slopesnew = np.zeros(sim_params.n_bins)
+    Nsnew = np.zeros(sim_params.n_bins)
+    Msnew = np.zeros(sim_params.n_bins)
+    mmean = np.zeros(sim_params.n_bins)
+    upbos = np.zeros(sim_params.n_bins)
 
     if showdetails == 1:
         print("n0s", n0s)
         print("slopes", slopes)
 
-    for ssa in range(len(n0s)):
-        if n0s[ssa] + 0.5 * (binbounds[ssa] - binbounds[ssa + 1]) * slopes[ssa] <= 0:
-            upbos[ssa] = binbounds[ssa]
-        elif n0s[ssa] + 0.5 * (binbounds[ssa + 1] - binbounds[ssa]) * slopes[ssa] >= 0:
-            upbos[ssa] = binbounds[ssa + 1]
-        else:
-            upbos[ssa] = (
-                0.5 * binbounds[ssa] + 0.5 * binbounds[ssa + 1] - n0s[ssa] / slopes[ssa]
-            )
+    # Calculate r0s array in one operation
+    r0s = (binbounds[1:] + binbounds[:-1]) / 2.0
 
-    for s in range(len(n0s)):
-        r0s[s] = (binbounds[s + 1] + binbounds[s]) / 2.0
+    # Vectorized conditions for upper bounds calculation
+    cond1 = n0s + 0.5 * (binbounds[:-1] - binbounds[1:]) * slopes <= 0
+    cond2 = n0s + 0.5 * (binbounds[1:] - binbounds[:-1]) * slopes >= 0
 
-    for s in range(len(n0s)):
-        if upbos[s] >= binbounds[s + 1]:
-            Ns[s] = n0s[s] * (binbounds[s + 1] - binbounds[s])
-            Ms[s] = (4 * np.pi * rho / 3.0) * (
-                (0.2 * (binbounds[s + 1] ** 5 - binbounds[s] ** 5) * slopes[s])
-                + (
-                    0.25
-                    * (binbounds[s + 1] ** 4 - binbounds[s] ** 4)
-                    * (n0s[s] - slopes[s] * r0s[s])
-                )
-            )
-            mmean[s] = Ms[s] / Ns[s]
-        elif upbos[s] > binbounds[s]:
-            Ns[s] = n0s[s] * (upbos[s] - binbounds[s]) + slopes[s] * (
-                upbos[s] - binbounds[s]
-            ) * (upbos[s] / 2.0 + binbounds[s] / 2.0 - r0s[s])
-            Ms[s] = (4 * np.pi * rho / 3.0) * (
-                (0.2 * (upbos[s] ** 5 - binbounds[s] ** 5) * slopes[s])
-                + (
-                    0.25
-                    * (upbos[s] ** 4 - binbounds[s] ** 4)
-                    * (n0s[s] - slopes[s] * r0s[s])
-                )
-            )
-            mmean[s] = Ms[s] / Ns[s]
-        else:
-            Ns[s] = 0.0
-            Ms[s] = 0.0
-            mmean[s] = (
-                (1 / 3.0) * np.pi * rho * (binbounds[s + 1] ** 4 - binbounds[s] ** 4)
-            )
+    # Vectorized upper bounds calculation
+    upbos = np.where(
+        cond1,
+        binbounds[:-1],
+        np.where(
+            cond2, binbounds[1:], 0.5 * (binbounds[:-1] + binbounds[1:]) - n0s / slopes
+        ),
+    )
+
+    # Vectorized masks for different conditions
+    mask_full = upbos >= binbounds[1:]
+    mask_partial = (upbos > binbounds[:-1]) & ~mask_full
+
+    # Initialize arrays
+    Ns = np.zeros_like(n0s)
+    Ms = np.zeros_like(n0s)
+    mmean = np.zeros_like(n0s)
+
+    # Full bins calculation
+    Ns[mask_full] = n0s[mask_full] * (
+        binbounds[1:][mask_full] - binbounds[:-1][mask_full]
+    )
+    Ms[mask_full] = (4 * np.pi * rho / 3.0) * (
+        0.2
+        * (binbounds[1:][mask_full] ** 5 - binbounds[:-1][mask_full] ** 5)
+        * slopes[mask_full]
+        + 0.25
+        * (binbounds[1:][mask_full] ** 4 - binbounds[:-1][mask_full] ** 4)
+        * (n0s[mask_full] - slopes[mask_full] * r0s[mask_full])
+    )
+
+    # Partial bins calculation
+    Ns[mask_partial] = n0s[mask_partial] * (
+        upbos[mask_partial] - binbounds[:-1][mask_partial]
+    ) + slopes[mask_partial] * (upbos[mask_partial] - binbounds[:-1][mask_partial]) * (
+        upbos[mask_partial] / 2.0
+        + binbounds[:-1][mask_partial] / 2.0
+        - r0s[mask_partial]
+    )
+
+    Ms[mask_partial] = (4 * np.pi * rho / 3.0) * (
+        0.2
+        * (upbos[mask_partial] ** 5 - binbounds[:-1][mask_partial] ** 5)
+        * slopes[mask_partial]
+        + 0.25
+        * (upbos[mask_partial] ** 4 - binbounds[:-1][mask_partial] ** 4)
+        * (n0s[mask_partial] - slopes[mask_partial] * r0s[mask_partial])
+    )
+
+    # Empty bins get default values
+    mask_empty = ~(mask_full | mask_partial)
+    mmean[mask_empty] = (np.pi * rho / 3.0) * (
+        binbounds[1:][mask_empty] ** 4 - binbounds[:-1][mask_empty] ** 4
+    )
+
+    # Calculate mean mass for non-empty bins
+    mask_nonempty = ~mask_empty
+    mmean[mask_nonempty] = Ms[mask_nonempty] / Ns[mask_nonempty]
 
     if showdetails == 1:
         print("Ns", Ns)
@@ -707,11 +729,11 @@ def run_sim(sim_params: SimulationParameters, const: PhysicalConstants = CONST) 
     upbsin[0] = binbounds[1]
 
     togglecondens = 0
-    n0slist: List[np.ndarray] = []
-    slopeslist: List[np.ndarray] = []
-    Upbos: List[np.ndarray] = []
-    NPrecipitations: List[np.ndarray] = []
-    MPrecipitations: List[np.ndarray] = []
+    n0s_per_level = np.zeros((stepmax, sim_params.n_bins))
+    slopes_per_level = np.zeros((stepmax, sim_params.n_bins))
+    upper_bound_per_level = np.zeros((stepmax, sim_params.n_bins))
+    n_precip_per_level = np.zeros((stepmax, sim_params.n_bins))
+    m_precip_per_level = np.zeros((stepmax, sim_params.n_bins))
 
     n0s = np.zeros(sim_params.n_bins)
     slopes = np.zeros(sim_params.n_bins)
@@ -767,13 +789,13 @@ def run_sim(sim_params: SimulationParameters, const: PhysicalConstants = CONST) 
             const=const,
         )
 
-        frsnew = 0.6222 * (
+        frsnew = const.epsilon * (
             saturation_vapour_pressure(Trisenew)
             / (Pnew - saturation_vapour_pressure(Trisenew))
         )
         fsatnew = frsnew / (1.0 + frsnew)
 
-        if w > 0.001:
+        if w > sim_params.start_upward_velocity:
             entrain_param = entrainment(Trisenew, Pnew, Rplume, const)
             fracdelm = -entrain_param * sim_params.pressure_step
             frise = frise * (1.0 - fracdelm)
@@ -786,7 +808,7 @@ def run_sim(sim_params: SimulationParameters, const: PhysicalConstants = CONST) 
         if fsatnew < frise:
             fcondens = frise - fsatnew
             frisenew = fsatnew
-            if w > 0.001:
+            if w > sim_params.start_upward_velocity:
                 frdrho = (
                     -sim_params.pressure_step / Pnew - (Trisenew - Trise) / Trisenew
                 ) + (
@@ -803,7 +825,7 @@ def run_sim(sim_params: SimulationParameters, const: PhysicalConstants = CONST) 
         else:
             fcondens = 0.0
             frisenew = frise
-            if w > 0.001:
+            if w > sim_params.start_upward_velocity:
                 frdrho = (
                     -sim_params.pressure_step - (Trisenew - Trise) * Pnew / Trisenew
                 ) / Pnew
@@ -873,7 +895,15 @@ def run_sim(sim_params: SimulationParameters, const: PhysicalConstants = CONST) 
 
                 for q in range(stepsfly):
                     n0s, slopes, upbs = stepgrow(
-                        n0s, slopes, binbounds, upbs, const.rho_water, Eij, vrel, delt
+                        sim_params,
+                        n0s,
+                        slopes,
+                        binbounds,
+                        upbs,
+                        const.rho_water,
+                        Eij,
+                        vrel,
+                        delt,
                     )
             else:
                 nar = (
@@ -892,7 +922,15 @@ def run_sim(sim_params: SimulationParameters, const: PhysicalConstants = CONST) 
 
                 for q in range(stepsfly):
                     n0s, slopes, upbs = stepgrow(
-                        n0s, slopes, binbounds, upbs, const.rho_water, Eij, vrel, delt
+                        sim_params,
+                        n0s,
+                        slopes,
+                        binbounds,
+                        upbs,
+                        const.rho_water,
+                        Eij,
+                        vrel,
+                        delt,
                     )
 
             binsed = max(
@@ -961,13 +999,13 @@ def run_sim(sim_params: SimulationParameters, const: PhysicalConstants = CONST) 
         condensate = condensate_new
         w = wnew
         if w < 0:
-            w = 0.001
+            w = sim_params.start_upward_velocity
 
-        n0slist.append(n0s)
-        slopeslist.append(slopes)
-        Upbos.append(upbs)
-        NPrecipitations.append(precipN)
-        MPrecipitations.append(precipM)
+        n0s_per_level[i, :] = n0s
+        slopes_per_level[i, :] = slopes
+        upper_bound_per_level[i, :] = upbs
+        n_precip_per_level[i, :] = precipN
+        m_precip_per_level[i, :] = precipM
 
     # Final precipitation
     precipN = np.zeros(sim_params.n_bins)
@@ -988,8 +1026,8 @@ def run_sim(sim_params: SimulationParameters, const: PhysicalConstants = CONST) 
         ) + (0.5 * (rpl**2 - rmi**2)) * slopes[ffg]
         precipM[ffg] = RR
 
-    NPrecipitations[-1] = NPrecipitations[-1] + precipN
-    MPrecipitations[-1] = MPrecipitations[-1] + precipM
+    n_precip_per_level[-1] = n_precip_per_level[-1] + precipN
+    m_precip_per_level[-1] = m_precip_per_level[-1] + precipM
 
     # Calculate flash rates
     J1ss = np.zeros(stepmax // sim_params.flash_rate_sampling)
@@ -1000,8 +1038,8 @@ def run_sim(sim_params: SimulationParameters, const: PhysicalConstants = CONST) 
             print(ib)
 
         i = ib * 10
-        n0s = n0slist[i]
-        slopes = slopeslist[i]
+        n0s = n0s_per_level[i, :]
+        slopes = slopes_per_level[i, :]
         P = Pressures[i]
         T = Tempsrise[i]
         w = Velocities[i]
@@ -1052,11 +1090,11 @@ def run_sim(sim_params: SimulationParameters, const: PhysicalConstants = CONST) 
                 precipC[fg] = abs(3.0 * pCN / pCD)
 
         precipN = precipN + np.sum(
-            (NPrecipitations[i:stepmax] * Velocities[i:stepmax, None] * precipC),
+            (n_precip_per_level[i:stepmax] * Velocities[i:stepmax, None] * precipC),
             axis=0,
         )
         precipM = precipM + np.sum(
-            (MPrecipitations[i:stepmax] * Velocities[i:stepmax, None] * precipC),
+            (m_precip_per_level[i:stepmax] * Velocities[i:stepmax, None] * precipC),
             axis=0,
         )
 

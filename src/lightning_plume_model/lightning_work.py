@@ -556,50 +556,68 @@ def dQdt(
     ionvelocities: List[float] = [],
     radju: float = 1,
 ) -> np.ndarray:
-    """Calculate charging rate - COPIED FROM ORIGINAL."""
-    r0s = np.zeros(len(n0s))
-    ns = np.zeros(len(n0s))
-    dQidt = np.zeros(len(n0s))
+    """Calculate charging rate using vectorized operations."""
+    # Calculate r0s array
+    r0s = (binbounds[1:] + binbounds[:-1]) / 2.0
 
-    for s in range(len(n0s)):
-        r0s[s] = (binbounds[s + 1] + binbounds[s]) / 2.0
-        if n0s[s] + 0.5 * (binbounds[s] - binbounds[s + 1]) * slopes[s] <= 0:
-            rpl = binbounds[s]
-        elif n0s[s] + 0.5 * (binbounds[s + 1] - binbounds[s]) * slopes[s] >= 0:
-            rpl = binbounds[s + 1]
-        else:
-            rpl = 0.5 * binbounds[s] + 0.5 * binbounds[s + 1] - n0s[s] / slopes[s]
-        rmi = binbounds[s]
-        ns[s] = (rpl - rmi) * (n0s[s] - 0.5 * (binbounds[s + 1] + rmi) * slopes[s]) + (
-            0.5 * (rpl**2 - rmi**2)
-        ) * slopes[s]
+    # Calculate ns array using vectorized operations
+    cond1 = n0s + 0.5 * (binbounds[:-1] - binbounds[1:]) * slopes <= 0
+    cond2 = n0s + 0.5 * (binbounds[1:] - binbounds[:-1]) * slopes >= 0
 
-    for iu in range(len(n0s)):
-        dQitot = 0.0
-        for ju in range(len(n0s)):
-            rG = radju * min(r0s[iu], r0s[ju])
-            if rG <= 0.000111:
-                Gr = 0.0271 * ((1000000.0 * rG) ** 2.7)
-            else:
-                Gr = 0.0988 * ((1000000.0 * rG) ** 0.98)
-            velocity = abs(velocities[iu] - velocities[ju])
-            delQ = ((velocity / 3.0) ** 2.5) * Gr * (10**-15)
-            dQi = delQ * ns[ju] * np.pi * (r0s[iu] ** 2 + r0s[ju] ** 2) * (radju**2)
-            if iu < ju:
-                dQitot = dQitot + dQi
-            else:
-                dQitot = dQitot - dQi
-        for k in range(len(ioncharges)):
-            dQik = (
-                ioncharges[k]
-                * ionnumbers[k]
-                * ionvelocities[k]
-                * (np.pi * r0s[iu] ** 2)
-            )
-            dQitot = dQitot + dQik
-        dQidt[iu] = dQitot * Qcoefff
+    rpl = np.where(
+        cond1,
+        binbounds[:-1],
+        np.where(
+            cond2, binbounds[1:], 0.5 * (binbounds[:-1] + binbounds[1:]) - n0s / slopes
+        ),
+    )
 
-    return dQidt
+    rmi = binbounds[:-1]
+
+    ns = (rpl - rmi) * (n0s - 0.5 * (binbounds[1:] + rmi) * slopes) + 0.5 * (
+        rpl**2 - rmi**2
+    ) * slopes
+
+    # Create charge transfer matrix
+    n_bins = len(n0s)
+    dQidt = np.zeros(n_bins)
+
+    # Calculate all pairwise radius and velocity differences at once
+    rG = radju * np.minimum.outer(r0s, r0s)
+    vel_diff = np.abs(velocities[:, np.newaxis] - velocities)
+
+    # Vectorized Gr calculation
+    mask_small = rG <= 0.000111
+    Gr = np.zeros_like(rG)
+    Gr[mask_small] = 0.0271 * ((1e6 * rG[mask_small]) ** 2.7)
+    Gr[~mask_small] = 0.0988 * ((1e6 * rG[~mask_small]) ** 0.98)
+
+    # Calculate delQ matrix
+    delQ = ((vel_diff / 3.0) ** 2.5) * Gr * 1e-15
+
+    # Calculate geometric factor
+    geom_factor = np.pi * (r0s[:, np.newaxis] ** 2 + r0s**2) * (radju**2)
+
+    # Calculate charge transfer matrix
+    charge_matrix = delQ * ns * geom_factor
+
+    # Sum up contributions (upper triangle minus lower triangle)
+    dQidt = np.sum(np.triu(charge_matrix, 1) - np.tril(charge_matrix), axis=1)
+
+    # Add ion contributions if any
+    if ioncharges:
+        ion_contributions = np.sum(
+            [
+                charge * number * velocity * (np.pi * r0s**2)
+                for charge, number, velocity in zip(
+                    ioncharges, ionnumbers, ionvelocities
+                )
+            ],
+            axis=0,
+        )
+        dQidt += ion_contributions
+
+    return dQidt * Qcoefff
 
 
 def dEdt(
@@ -780,8 +798,8 @@ def kayer(
         fsatnew = frsnew / (1.0 + frsnew)
 
         if w > 0.001:
-            phinew = -0.2 * const.R * Trisenew / (Rplume * const.mu * Pnew * const.g)
-            fracdelm = -phinew * sim_params.pressure_step
+            entrain_param = entrainment(Trisenew, Pnew, Rplume, const)
+            fracdelm = -entrain_param * sim_params.pressure_step
             frise = frise * (1.0 - fracdelm)
             condensate = condensate * (1.0 - fracdelm)
             n0s = n0s * (1.0 - fracdelm) * (Pnew / (Pnew + sim_params.pressure_step))
@@ -994,10 +1012,10 @@ def kayer(
     MPrecipitations[-1] = MPrecipitations[-1] + precipM
 
     # Calculate flash rates
-    J1ss = np.zeros(990)
-    tcrits = np.zeros(990)
+    J1ss = np.zeros(stepmax // sim_params.flash_rate_step)
+    tcrits = np.zeros(stepmax // sim_params.flash_rate_step)
 
-    for ib in range(990):
+    for ib in range(stepmax // sim_params.flash_rate_step):
         if (ib / 100.0) == np.ceil(ib / 100.0):
             print(ib)
 
@@ -1155,7 +1173,7 @@ def kayer(
         if qara != 0:
             tcrits[ib] = np.sqrt(2.0 * Emax / abs(qara))
 
-    PPV = 5.0 * np.array(Pressures)[np.arange(990) * 10] * J1ss * tcrits / 2.0
+    PPV = 5.0 * np.array(Pressures)[:: sim_params.flash_rate_step] * J1ss * tcrits / 2.0
     verticalrise = (
         100.0
         * np.array(Tempsrise)
@@ -1163,10 +1181,10 @@ def kayer(
         / (const.g * np.array(Pressures) * const.mu)
     )
     flash_rate = abs(
-        (10**6) * verticalrise[np.arange(989) * 10] * PPV[:-1] / const.Eflash
+        (10**6) * verticalrise[:: sim_params.flash_rate_step] * PPV[:] / const.Eflash
     )
 
-    Plim = np.array(Pressures)[np.arange(989) * 10]
+    Plim = np.array(Pressures)[:: sim_params.flash_rate_step]
 
     return (
         Pressures,

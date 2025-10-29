@@ -938,7 +938,119 @@ def dEdt(
 
 
 def run_sim(sim_params: SimulationParameters, const: PhysicalConstants = CONST) -> dict:
-    """Run simulation."""
+    """
+    Run a complete lightning plume simulation for a convective updraft.
+
+    This function simulates the vertical evolution of a convective plume from surface
+    to upper atmosphere, tracking thermodynamic properties, particle growth through
+    collisional coalescence, charge separation, and lightning flash rates. The simulation
+    uses a one-dimensional model with entrainment, moist adiabatic processes, and
+    microphysical interactions between particles in logarithmically-spaced size bins.
+
+    The model advances through pressure levels, computing at each step:
+    1. Thermodynamic evolution (temperature, humidity, condensation)
+    2. Dynamic evolution (vertical velocity, plume radius, entrainment)
+    3. Particle growth via collisional coalescence
+    4. Sedimentation and precipitation
+    5. Charge separation and electric field buildup
+    6. Lightning flash rate estimation
+
+    Parameters
+    ----------
+    sim_params : SimulationParameters
+        Simulation configuration containing:
+        - plume_base_temp : float
+            Initial plume temperature at surface [K]
+        - base_humidity_fraction : float
+            Relative humidity at plume base [dimensionless, 0-1]
+        - plume_base_radius : float
+            Initial radius of convective plume [m]
+        - temp_supercool : float
+            Supercooling threshold below freezing [K]
+        - water_collision_efficiency : float
+            Collision efficiency for liquid water droplets [dimensionless, 0-1]
+        - ice_collision_efficiency : float
+            Collision efficiency for ice particles [dimensionless, 0-1]
+        - start_pressure : float, optional
+            Initial pressure level [Pa], default 100000.0
+        - start_upward_velocity : float, optional
+            Initial vertical velocity [m/s], default 0.001
+        - pressure_step : float, optional
+            Pressure decrement per simulation step [Pa], default 10.0
+        - growth_time_step : float, optional
+            Time step for particle growth integration [s], default 0.01
+        - n_bins : int, optional
+            Number of particle size bins, default 31
+        - min_radius : float, optional
+            Minimum particle radius [m], default 1e-5
+        - max_radius : float, optional
+            Maximum particle radius [m], default 0.46340950011842
+        - flash_rate_sampling : int, optional
+            Sampling interval for flash rate calculation, default 10
+    const : PhysicalConstants, optional
+        Physical constants object containing fundamental constants (g, R, mu, epsilon,
+        c_p, L, eps0, etc.), defaults to CONST
+
+    Returns
+    -------
+    dict
+        Dictionary containing simulation results with the following keys:
+
+        pressure : np.ndarray
+            Pressure at each level [Pa], shape (n_steps,)
+        velocity : np.ndarray
+            Vertical velocity at each level [m/s], shape (n_steps,)
+        plume_temp : np.ndarray
+            Plume temperature (rising air) at each level [K], shape (n_steps,)
+        env_temp : np.ndarray
+            Environment temperature (falling air) at each level [K], shape (n_steps,)
+        flash_rate : np.ndarray
+            Lightning flash rate at sampled levels [flashes/s/km^2],
+            shape (n_steps // flash_rate_sampling,)
+        plume_radius : np.ndarray
+            Plume radius at each level [m], shape (n_steps,)
+        fs_rise : np.ndarray
+            Water vapor mass fraction in rising air [kg/kg], shape (n_steps,)
+        ls_rise : np.ndarray
+            Liquid/ice condensate mass fraction [kg/kg], shape (n_steps,)
+
+    Notes
+    -----
+    The simulation proceeds upward through the atmosphere in discrete pressure steps,
+    starting at `start_pressure` and decreasing by `pressure_step` each iteration until
+    reaching near-zero pressure or the velocity becomes negative.
+
+    Particle size distribution is represented using a piecewise linear approach within
+    logarithmically-spaced bins. Each bin is characterized by a center density (n0s)
+    and slope, allowing sub-bin resolution of the distribution.
+
+    Charge separation follows an empirical parameterization based on particle-particle
+    collisions with relative velocities. The charging rate depends on particle sizes,
+    collision efficiencies, and differential sedimentation velocities.
+
+    Flash rate is calculated from the electric field growth rate and critical breakdown
+    field strength (3P, where P is pressure in Pascals). The flash rate represents the
+    energy dissipation rate divided by typical lightning flash energy (~1.5 GJ).
+
+    The simulation uses vectorized numpy operations throughout for computational
+    efficiency, particularly in the particle growth, charge transfer, and electric
+    field calculations.
+
+    Examples
+    --------
+    >>> from lightning_work import SimulationParameters, PhysicalConstants, run_sim
+    >>> sim_params = SimulationParameters(
+    ...     plume_base_temp=300.0,
+    ...     base_humidity_fraction=0.8,
+    ...     plume_base_radius=1000.0,
+    ...     temp_supercool=40.0,
+    ...     water_collision_efficiency=0.5,
+    ...     ice_collision_efficiency=0.1
+    ... )
+    >>> results = run_sim(sim_params)
+    >>> print(f"Peak flash rate: {results['flash_rate'].max():.3f} flashes/s/km^2")
+    Peak flash rate: 0.234 flashes/s/km^2
+    """
     anlT = 10.0 + 3.0 * (sim_params.plume_base_temp - 295.0) / 10.0
     fprea = (
         sim_params.base_humidity_fraction

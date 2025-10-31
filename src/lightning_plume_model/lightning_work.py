@@ -9,6 +9,8 @@ from typing import Tuple, Union
 import matplotlib.pyplot as plt
 import numpy as np
 
+PROJECT_NAME = "convective_plume_earth"
+
 
 @dataclass(frozen=True)
 class PhysicalConstants:
@@ -28,7 +30,7 @@ class PhysicalConstants:
     Eflash: float = 1.5e9  # Energy per lightning flash [J]
     mfptime: float = 4.0e-11  # Mean free path time for ion collisions [s]
     temp_freeze: float = 273.15  # Freezing point of water [K]
-    bar_to_pa: float = 1e5  # Conversion factor from bar to Pascal [Pa/bar]
+    pa_to_bar: float = 1e-5  # Conversion factor from Pascal to bar
 
 
 # Initialize physical constants
@@ -1603,10 +1605,11 @@ def run_sim(sim_params: SimulationParameters, const: PhysicalConstants = CONST) 
 
 
 def plot_comparison(
-    results: dict, sim_params: SimulationParameters, output_dir: Union[str, Path]
+    results: dict,
+    sim_params_container: dict[SimulationParameters],
+    output_dir: Union[str, Path],
 ):
-    """Create comparison plots for two temperature scenarios."""
-    # Define plot configurations as a dict of PlotConfigs
+    """Create comparison plots for a series of simulations."""
 
     @dataclass
     class _PlotConfig:
@@ -1620,7 +1623,7 @@ def plot_comparison(
         "velocity": _PlotConfig(
             ylabel="Vertical velocity",
             title="Vertical Plume Velocity",
-            units="m/s",
+            units="m s-1",
         ),
         "plume_temp": _PlotConfig(
             ylabel="Temperature", title="Plume Temperature", units="K"
@@ -1630,14 +1633,14 @@ def plot_comparison(
         ),
         "temp_diff": _PlotConfig(
             ylabel="Temperature difference",
-            title="Plume-Environment Temp Difference",
+            title="Plume-Environment Temperature Difference",
             units="K",
         ),
         "plume_radius": _PlotConfig(ylabel="Radius", title="Plume Radius", units="m"),
         "flash_rate": _PlotConfig(
             ylabel="Flash rate",
             title="Lightning Flash Rate",
-            units="flashes/s/km2",
+            units="flashes s-1 km-2",
         ),
     }
 
@@ -1655,14 +1658,19 @@ def plot_comparison(
         for run_label, data in results.items():
             # Convert pressure to bar
             if name == "flash_rate":  # Flash rate uses fewer points
-                x = data["pressure"][:: sim_params.flash_rate_sampling] / 1e5
+                y = (
+                    data["pressure"][
+                        :: sim_params_container[run_label].flash_rate_sampling
+                    ]
+                    * CONST.pa_to_bar
+                )
             else:
-                x = data["pressure"] / 1e5
+                y = data["pressure"] * CONST.pa_to_bar
 
             if name == "temp_diff":
-                y = data["plume_temp"] - data["env_temp"]  # Plume temp - Env temp
+                x = data["plume_temp"] - data["env_temp"]  # Plume temp - Env temp
             else:
-                y = data[name]
+                x = data[name]
 
             line = ax.plot(x, y, label=run_label, linewidth=1.5)
 
@@ -1673,8 +1681,9 @@ def plot_comparison(
                 handles.extend(line)
                 labels.append(run_label)
 
-        ax.set_xlabel("Pressure [bar]")
-        ax.set_ylabel(f"{config.ylabel} ({config.units})")
+        ax.set_ylabel("Pressure [bar]")
+        ax.set_ylim(sim_params_container[run_label].start_pressure * CONST.pa_to_bar, 0)
+        ax.set_xlabel(f"{config.ylabel} [{config.units}]")
         ax.set_title(config.title)
         ax.grid(True, alpha=0.3)
 
@@ -1688,13 +1697,10 @@ def plot_comparison(
         frameon=True,
         fontsize=10,
     )
-    param_desc = (
-        f"base_temp_{sim_params.plume_base_temp:.0f}__{sim_params.temp_supercool:.0f}__"
-        f"{sim_params.water_collision_efficiency:.1f}__{sim_params.ice_collision_efficiency:.1f}"
-    ).replace(".", "p")
-    fig.suptitle(param_desc, fontsize=14, fontweight="bold", y=1.075)
 
-    filename = f"{param_desc}.png"
+    fig.suptitle(f"{PROJECT_NAME}\n", fontsize="x-large", fontweight="bold", y=1.075)
+
+    filename = f"{PROJECT_NAME}.png"
     fig.savefig(Path(output_dir) / filename, dpi=150, bbox_inches="tight")
     print(f"  Saved: {filename}")
     plt.close()
@@ -1706,9 +1712,9 @@ def main():
 
     const = PhysicalConstants()  # centralized constants instance
 
-    base_temps = [280.0, 310.0]
+    base_temps = [280.0, 290.0, 300.0, 310.0]
 
-    results = {}
+    sim_params_container = {}
     for base_temp in base_temps:
         sim_params = SimulationParameters(
             # n_bins=15,
@@ -1716,29 +1722,36 @@ def main():
             plume_base_temp=base_temp,
             base_humidity_fraction=0.9,
             plume_base_radius=1000.0,
-            temp_supercool=40.0,
-            water_collision_efficiency=0.5,
+            temp_supercool=20.0,
+            water_collision_efficiency=0.8,
             ice_collision_efficiency=0.0,
             pressure_step=10,
             flash_rate_sampling=10,
         )
+        run_label = (
+            f"{sim_params.plume_base_temp:.0f}__{sim_params.temp_supercool:.0f}__"
+            f"{sim_params.water_collision_efficiency:.1f}__{sim_params.ice_collision_efficiency:.1f}"
+        ).replace(".", "p")
+        sim_params_container[run_label] = sim_params
 
-        print(f"Simulating {base_temp:.0f} K...")
-        run_label = f"base_temp_{base_temp:.0f}K"
+    results = {}
+    for run_label, sim_params in sim_params_container.items():
+        print(f"Running simulation: {run_label}")
 
         results[run_label] = run_sim(sim_params, const)
         print(
-            f"{run_label}: Total flash rate = "
-            f"{float(np.sum(results[run_label]['flash_rate'])) * 1.5e3:.2f} W/m2"
+            f"Total flash rate = "
+            f"{float(np.sum(results[run_label]['flash_rate'])) * 1.5e3:.2f} W m-2"
         )
 
     elapsed_time = time.time() - start_time
-    print(f"\nCalculation time: {elapsed_time:.2f} seconds")
+    print(f"Calculation time: {elapsed_time:.2f} seconds")
 
     print("Generating plots...")
     outdir = Path(__file__).parent / "output"
     outdir.mkdir(exist_ok=True, parents=True)
-    plot_comparison(results, sim_params, outdir)
+    plot_comparison(results, sim_params_container, outdir)
+    print("Done.")
 
 
 if __name__ == "__main__":

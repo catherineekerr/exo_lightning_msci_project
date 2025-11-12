@@ -1733,7 +1733,7 @@ def plot_comparison(
         fontsize=10,
     )
 
-    fig.suptitle(f"{PROJECT_NAME}\n", fontsize="x-large", fontweight="bold", y=1.075)
+    fig.suptitle('1D Model of Convective Plume for Earth', fontsize="x-large", fontweight="bold", y=1.075)
 
     filename = f"{PROJECT_NAME}.png"
     fig.savefig(Path(output_dir) / filename, dpi=150, bbox_inches="tight")

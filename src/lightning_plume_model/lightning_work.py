@@ -1,63 +1,19 @@
 #!/usr/bin/env python3
 """Earth 1-D Lightning Simulation."""
 
-import time
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Tuple, Union
 
-import matplotlib.pyplot as plt
+from constants import SimulationParameters
+from constants import PhysicalConstants
+
+import time
+from typing import Tuple
+
 import numpy as np
 
-PROJECT_NAME = "convective_plume_earth"
-
-
-@dataclass(frozen=True)
-class PhysicalConstants:
-    """Physical constants used in lightning plume model calculations."""
-
-    gravity: float = 9.81  # Gravitational acceleration [m/s2]
-    universal_gas_constant: float = 8.31446  # Universal gas constant [J/mol/K]
-    molar_mass_dry_air: float = 0.02896  # Molar mass of dry air [kg/mol]
-    epsilon: float = 0.6222  # Ratio of molecular weights [dimensionless]
-    c_p: float = 14500.0  # Specific heat capacity at constant pressure [J/kg/K]
-    latent_heat_v: float = 2257000.0  # Latent heat of vaporization of water [J/kg]
-    vacuum_perm: float = 8.854e-12  # Vacuum permittivity [F/m]
-    e_charge: float = 1.602e-19  # Elementary charge [C]
-    rho_water: float = 1000.0  # Density of liquid water [kg/m3]
-    rhoro: float = 2.5  # Ratio of ice to liquid water density [dimensionless]
-    drag_coef: float = 0.5  # Drag coefficient [dimensionless]
-    energy_per_flash: float = 1.5e9  # Energy per lightning flash [J]
-    mean_free_path_ion_coll: float = (
-        4.0e-11  # Mean free path time for ion collisions [s]
-    )
-    temp_freeze: float = 273.15  # Freezing point of water [K]
-    pa_to_bar: float = 1e-5  # Conversion factor from Pascal to bar
-
+# from plotting.py import plot_comparison
 
 # Initialize physical constants
 CONST = PhysicalConstants()
-
-
-@dataclass(frozen=True)
-class SimulationParameters:
-    """Configurable parameters for a single simulation run."""
-
-    plume_base_temp: float
-    base_humidity_fraction: float
-    plume_base_radius: float
-    temp_supercool: float
-    water_collision_efficiency: float
-    ice_collision_efficiency: float
-    start_pressure: float = 100_000.0
-    start_upward_velocity: float = 0.001
-    pressure_step: float = 10.0
-    growth_time_step: float = 0.01
-    n_bins: int = 31
-    min_radius: float = 1e-5
-    max_radius: float = 0.46340950011842
-    flash_rate_sampling: int = 10
-    dt = 0.01
 
 
 def saturation_vapour_pressure(temp: float) -> float:
@@ -1105,7 +1061,7 @@ def run_sim(sim_params: SimulationParameters, const: PhysicalConstants = CONST) 
     )
     rhrro = const.rhoro ** (1.0 / 3.0)
     vrQQ = np.sqrt(
-        (8.0 / (3.0 * const.drag_coef))
+        (8.0 / (3.0 * drag_coefficient(1, 1)))
         * const.rho_water
         * const.gravity
         * const.universal_gas_constant
@@ -1638,107 +1594,36 @@ def run_sim(sim_params: SimulationParameters, const: PhysicalConstants = CONST) 
         "ls_rise": lsrise,
     }
 
+def drag_coefficient(Re, fsa):
+    """
+    Calculate the drag coefficient of a raindrop.
 
-def plot_comparison(
-    results: dict,
-    sim_params_container: dict[SimulationParameters],
-    output_dir: Union[str, Path],
-):
-    """Create comparison plots for a series of simulations."""
+    This function computes the drag coefficient based on the Reynolds number and a correction term for deviations from spherical shapes (Cshape).
 
-    @dataclass
-    class _PlotConfig:
-        """Configuration for a single plot."""
+    Parameters
+    ----------
+    Re : float
+        Value of Reynolds number (dimensionless quantity to decribe fluid flow).
+    fsa : float
+        Ratio of surface area of oblate spheroid raindrop to surface area of sphere.
+    Cshape: float
+        Correction term for deviations from spherical shape
 
-        ylabel: str
-        title: str
-        units: str
+    Returns
+    -------
+    float
+        Drag coefficient
 
-    plot_configs = {
-        "velocity": _PlotConfig(
-            ylabel="Vertical velocity",
-            title="Vertical Plume Velocity",
-            units="m s-1",
-        ),
-        "plume_temp": _PlotConfig(
-            ylabel="Temperature", title="Plume Temperature", units="K"
-        ),
-        "env_temp": _PlotConfig(
-            ylabel="Temperature", title="Environment Temperature", units="K"
-        ),
-        "temp_diff": _PlotConfig(
-            ylabel="Temperature difference",
-            title="Plume-Environment Temperature Difference",
-            units="K",
-        ),
-        "plume_radius": _PlotConfig(ylabel="Radius", title="Plume Radius", units="m"),
-        "flash_rate": _PlotConfig(
-            ylabel="Flash rate",
-            title="Lightning Flash Rate",
-            units="flashes s-1 km-2",
-        ),
-    }
+    Notes
+    -----
+    Equations taken from 
+    Loftus, K., & Wordsworth, R. D. (2021). The physics of falling raindrops in diverse planetary atmospheres.
+    Journal of Geophysical Research: Planets, 126, e2020JE006653. https://doi.org/10.1029/2020JE006653
 
-    # Create figure with mosaic layout using plot_configs keys
-    mosaic = [list(plot_configs.keys())[:3], list(plot_configs.keys())[3:]]
-
-    fig = plt.figure(figsize=(15, 10), constrained_layout=True)
-    axes = fig.subplot_mosaic(mosaic)
-
-    # Plot each variable
-    handles, labels = None, None
-    for name, config in plot_configs.items():
-        ax = axes[name]
-
-        for run_label, data in results.items():
-            # Convert pressure to bar
-            if name == "flash_rate":  # Flash rate uses fewer points
-                y = (
-                    data["pressure"][
-                        :: sim_params_container[run_label].flash_rate_sampling
-                    ]
-                    * CONST.pa_to_bar
-                )
-            else:
-                y = data["pressure"] * CONST.pa_to_bar
-
-            if name == "temp_diff":
-                x = data["plume_temp"] - data["env_temp"]  # Plume temp - Env temp
-            else:
-                x = data[name]
-
-            line = ax.plot(x, y, label=run_label, linewidth=1.5)
-
-            # Capture handles and labels from the first subplot
-            if handles is None:
-                handles, labels = [], []
-            if name == list(plot_configs.keys())[0]:
-                handles.extend(line)
-                labels.append(run_label)
-
-        ax.set_ylabel("Pressure [bar]")
-        ax.set_ylim(sim_params_container[run_label].start_pressure * CONST.pa_to_bar, 0)
-        ax.set_xlabel(f"{config.ylabel} [{config.units}]")
-        ax.set_title(config.title)
-        ax.grid(True, alpha=0.3)
-
-    # Add a single legend for the entire figure
-    fig.legend(
-        handles,
-        labels,
-        loc="upper center",
-        bbox_to_anchor=(0.5, 1.05),
-        ncol=len(labels),
-        frameon=True,
-        fontsize=10,
-    )
-
-    fig.suptitle(f"{PROJECT_NAME}\n", fontsize="x-large", fontweight="bold", y=1.075)
-
-    filename = f"{PROJECT_NAME}.png"
-    fig.savefig(Path(output_dir) / filename, dpi=150, bbox_inches="tight")
-    print(f"  Saved: {filename}")
-    plt.close()
+    """
+    Cshape = 1 + 1.5*(fsa-1)**0.5 + 6.7*(fsa-1)
+    ans = (24/Re*(1+0.15*Re**0.687) + 0.42*(1 + 4.25*10**4*Re**-1.16)**-1)*Cshape
+    return ans
 
 
 def main():
@@ -1774,6 +1659,12 @@ def main():
         print(f"Running simulation: {run_label}")
 
         results[run_label] = run_sim(sim_params, const)
+        with open(f'/home/jg22146/.conda/envs/new_lightning_project/{run_label}.txt', 'w') as file:
+            file.write(str(results[run_label]))
+
+
+    
+
         print(
             f"Total flash rate = "
             f"{float(np.sum(results[run_label]['flash_rate'])) * 1.5e3:.2f} W m-2"
@@ -1782,11 +1673,7 @@ def main():
     elapsed_time = time.time() - start_time
     print(f"Calculation time: {elapsed_time:.2f} seconds")
 
-    print("Generating plots...")
-    outdir = Path(__file__).parent / "output"
-    outdir.mkdir(exist_ok=True, parents=True)
-    plot_comparison(results, sim_params_container, outdir)
-    print("Done.")
+
 
 
 if __name__ == "__main__":

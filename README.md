@@ -1,1 +1,1 @@
-MSci final year research project on exoplanet lightning
+MSci final year research project on lightning on Earth-like exoplanets

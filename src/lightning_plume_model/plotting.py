@@ -1,22 +1,15 @@
-from constants import SimulationParameters
-from constants import PhysicalConstants
-from pathlib import Path
-from typing import Tuple, Union
+import os
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Union
 
 import matplotlib.pyplot as plt
 import numpy as np
+from constants import PROJECT_NAME, PhysicalConstants, SimulationParameters
 
-import os
-import ast
+from lightning_plume_model.lightning_model import results, sim_params_container
 
-from lightning_work import sim_params_container
-from lightning_work import results
-
-PROJECT_NAME = "convective_plume_earth"
 CONST = PhysicalConstants()
-
-
 
 
 def plot_comparison(
@@ -113,7 +106,12 @@ def plot_comparison(
         fontsize=10,
     )
 
-    fig.suptitle('1D Model of Convective Plume for Earth', fontsize="x-large", fontweight="bold", y=1.075)
+    fig.suptitle(
+        "1D Model of Convective Plume for Earth",
+        fontsize="x-large",
+        fontweight="bold",
+        y=1.075,
+    )
 
     filename = f"{PROJECT_NAME}.png"
     fig.savefig(Path(output_dir) / filename, dpi=150, bbox_inches="tight")
@@ -121,7 +119,7 @@ def plot_comparison(
     plt.close()
 
 
-file_name = '280__20__0p8__0p0.txt'
+file_name = "280__20__0p8__0p0.txt"
 
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -133,11 +131,11 @@ with open(file_path) as file:
 
 arrays = eval(data, {"array": np.array})
 
-pressure = arrays['pressure']
+pressure = arrays["pressure"]
 print(pressure)
 
 
-flash_rate = arrays['flash_rate']
+flash_rate = arrays["flash_rate"]
 print(flash_rate)
 
 print("Generating plots...")

@@ -1,16 +1,11 @@
 #!/usr/bin/env python3
 """Earth 1-D Lightning Simulation."""
 
-
-from constants import SimulationParameters
-from constants import PhysicalConstants
-
 import time
 from typing import Tuple
 
 import numpy as np
-
-# from plotting.py import plot_comparison
+from constants import PhysicalConstants, SimulationParameters
 
 # Initialize physical constants
 CONST = PhysicalConstants()
@@ -1594,6 +1589,7 @@ def run_sim(sim_params: SimulationParameters, const: PhysicalConstants = CONST) 
         "ls_rise": lsrise,
     }
 
+
 def drag_coefficient(Re, fsa):
     """
     Calculate the drag coefficient of a raindrop.
@@ -1616,13 +1612,15 @@ def drag_coefficient(Re, fsa):
 
     Notes
     -----
-    Equations taken from 
+    Equations taken from
     Loftus, K., & Wordsworth, R. D. (2021). The physics of falling raindrops in diverse planetary atmospheres.
     Journal of Geophysical Research: Planets, 126, e2020JE006653. https://doi.org/10.1029/2020JE006653
 
     """
-    Cshape = 1 + 1.5*(fsa-1)**0.5 + 6.7*(fsa-1)
-    ans = (24/Re*(1+0.15*Re**0.687) + 0.42*(1 + 4.25*10**4*Re**-1.16)**-1)*Cshape
+    Cshape = 1 + 1.5 * (fsa - 1) ** 0.5 + 6.7 * (fsa - 1)
+    ans = (
+        24 / Re * (1 + 0.15 * Re**0.687) + 0.42 * (1 + 4.25 * 10**4 * Re**-1.16) ** -1
+    ) * Cshape
     return ans
 
 
@@ -1659,11 +1657,10 @@ def main():
         print(f"Running simulation: {run_label}")
 
         results[run_label] = run_sim(sim_params, const)
-        with open(f'/home/jg22146/.conda/envs/new_lightning_project/{run_label}.txt', 'w') as file:
+        with open(
+            f"/home/jg22146/.conda/envs/new_lightning_project/{run_label}.txt", "w"
+        ) as file:
             file.write(str(results[run_label]))
-
-
-    
 
         print(
             f"Total flash rate = "
@@ -1672,8 +1669,6 @@ def main():
 
     elapsed_time = time.time() - start_time
     print(f"Calculation time: {elapsed_time:.2f} seconds")
-
-
 
 
 if __name__ == "__main__":

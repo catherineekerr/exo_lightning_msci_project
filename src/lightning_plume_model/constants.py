@@ -1,9 +1,6 @@
-#!/usr/bin/env python3
-"""Earth 1-D Lightning Simulation."""
-
+"""Constants and configurable parameters for the lightning plume model."""
 
 from dataclasses import dataclass
-
 
 PROJECT_NAME = "convective_plume_earth"
 
@@ -29,11 +26,10 @@ class PhysicalConstants:
     )
     temp_freeze: float = 273.15  # Freezing point of water [K]
     pa_to_bar: float = 1e-5  # Conversion factor from Pascal to bar
-    surface_ten: float = 0.00072 #Surface tension between liquid condensible and air [N/m]
-    rho_air: float = 1.293 #Density of liquid condensible [kg/m3]
-
-
-
+    surface_ten: float = (
+        0.00072  # Surface tension between liquid condensible and air [N/m]
+    )
+    rho_air: float = 1.293  # Density of liquid condensible [kg/m3]
 
 
 @dataclass(frozen=True)

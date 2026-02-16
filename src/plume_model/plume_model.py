@@ -3,6 +3,7 @@
 from typing import Tuple
 
 import numpy as np
+import scipy 
 from constants import PhysicalConstants, SimulationParameters
 from iris.coords import DimCoord
 from iris.cube import Cube, CubeList
@@ -47,6 +48,78 @@ def saturation_vapour_pressure(temp: float) -> float:
         a1 + temp * (a2 + temp * (a3 + temp * (a4 + temp * (a5 + temp * a6))))
     )
     return max(mb * 100.0, 0.0)
+
+def find_b_over_a(x, radius, const: PhysicalConstants):
+    x=float(x[0])
+
+    if x<= 0:
+        return np.array([100])
+
+    inner_sqrt = (x)**(-2) - 2*(x)**(-1/3) +1
+    if inner_sqrt<=0:
+        return np.array([100])
+    
+
+    value_for_sqrt = (const.surface_ten/(const.gravity*1/(const.rho_water-const.rho_air)))*(x)**(-1/6)*np.sqrt(inner_sqrt) - radius
+
+
+    if value_for_sqrt<=0:
+        return np.array([100])
+
+    else:
+
+        ans = np.sqrt(value_for_sqrt)       
+        return np.array([ans])
+
+
+def reynolds_number(particle_speed, radius, local_air_density):
+    return particle_speed*2*radius*local_air_density*5  ##change 5 to viscosity once i have access to 1977 book
+
+
+def terminal_velocity(axis_ratio,radius, Re, fsa):
+
+    def drag_coefficient(Re, fsa):
+        """
+    Calculate the drag coefficient of a raindrop.
+
+    This function computes the drag coefficient based on the Reynolds number and a correction term for deviations from spherical shapes (Cshape).
+
+    Parameters
+    ----------
+    Re : float
+        Value of Reynolds number (dimensionless quantity to decribe fluid flow).
+    fsa : float
+        Ratio of surface area of oblate spheroid raindrop to surface area of sphere.
+    Cshape: float
+        Correction term for deviations from spherical shape
+
+    Returns
+    -------
+    float
+        Drag coefficient
+
+    Notes
+    -----
+    Equations taken from 
+    Loftus, K., & Wordsworth, R. D. (2021). The physics of falling raindrops in diverse planetary atmospheres.
+    Journal of Geophysical Research: Planets, 126, e2020JE006653. https://doi.org/10.1029/2020JE006653
+
+    """
+    Cshape = 1 + 1.5*(fsa-1)**0.5 + 6.7*(fsa-1)
+    drag = (24/Re*(1+0.15*Re**0.687) + 0.42*(1 + 4.25*10**4*Re**-1.16)**-1)*Cshape
+    return drag
+
+    drag = drag_coefficient(Re, fsa)
+
+    v = np.sqrt(
+        (8.0 /3.0)
+        *(CONST.rho_water - CONST.rho_air)
+        /(CONST.rho_air)
+        *CONST.gravity
+        /drag_coefficient(Re,fsa)
+        *(axis_ratio)**(2.0/3.0)
+        *radius)
+    return v
 
 
 def temp_strat(pressure: float) -> float:
@@ -1072,12 +1145,14 @@ def run_sim(sim_params: SimulationParameters, const: PhysicalConstants) -> dict:
     )
     rhrro = const.rhoro ** (1.0 / 3.0)
     vrQQ = np.sqrt(
-        (8.0 / (3.0 * drag_coefficient(1, 1)))
+        (8.0 / (3.0 * const.drag_coef))
         * const.rho_water
         * const.gravity
         * const.universal_gas_constant
         / const.molar_mass_dry_air
     )
+
+    r0s = (binbounds[1:] + binbounds[:-1]) / 2.0
 
     # Initialize upbsin more efficiently
     upbsin = np.full(sim_params.n_bins, binbounds[0])
@@ -1107,6 +1182,8 @@ def run_sim(sim_params: SimulationParameters, const: PhysicalConstants) -> dict:
     lsrise = np.zeros(stepmax)
     Velocities = np.zeros(stepmax)
     Radii = np.zeros(stepmax)
+
+
 
     for i in range(stepmax):
         # Store current state
@@ -1442,6 +1519,20 @@ def run_sim(sim_params: SimulationParameters, const: PhysicalConstants) -> dict:
 
         # Vectorized particle velocities
         velpart = w - wjQQ * np.sqrt(binbounds[:-1] * 1.1892)
+
+        # Array of terminal velocities using different radii
+        terminal_velocities = np.zeros(len(r0s))
+        for i, r in enumerate(r0s):
+        
+            particle_velocity = np.mean(velpart)
+            reynold = reynolds_number(particle_velocity, r, const.rho_air)
+    
+            finding_b_over_a = scipy.optimize.root(find_b_over_a, x0=0.10, args=(r,))
+            b_over_a = finding_b_over_a.x[0]
+            #print(b_over_a)
+
+            terminal_velocities[i] = terminal_velocity(b_over_a, r, reynold, 1)
+            #print('the terminal velocity is', terminal_velocities[i])
 
         # Vectorized calculation of rpl
         rpl = calculate_rpl(n0s, slopes, binbounds)

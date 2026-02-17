@@ -27,8 +27,6 @@ class PhysicalConstants:
     mean_free_path_ion_coll: float
     temp_freeze: float
     pa_to_bar: float
-    surface_ten: float
-    rho_air: float
 
     @classmethod
     def from_yaml(
@@ -64,6 +62,8 @@ class SimulationParameters:
     flash_rate_sampling: int
     dt: float
     project_name: str = "default_project"
+    method_terminal_velocity: str = "aglyamov21"
+    # method_terminal_velocity: str = "loftus21"
 
     @classmethod
     def from_yaml(

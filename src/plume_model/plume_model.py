@@ -3,10 +3,21 @@
 from typing import Tuple
 
 import numpy as np
-import scipy 
+
+# Local modules
 from constants import PhysicalConstants, SimulationParameters
+from droplets import droplet_terminal_velocity, liquid_surface_tension
 from iris.coords import DimCoord
 from iris.cube import Cube, CubeList
+
+
+def air_density(pressure: float, temperature: float, const: PhysicalConstants) -> float:
+    """Calculate air density using the ideal gas law."""
+    return (
+        pressure
+        * const.molar_mass_dry_air
+        / (temperature * const.universal_gas_constant)
+    )
 
 
 def saturation_vapour_pressure(temp: float) -> float:
@@ -48,78 +59,6 @@ def saturation_vapour_pressure(temp: float) -> float:
         a1 + temp * (a2 + temp * (a3 + temp * (a4 + temp * (a5 + temp * a6))))
     )
     return max(mb * 100.0, 0.0)
-
-def find_b_over_a(x, radius, const: PhysicalConstants):
-    x=float(x[0])
-
-    if x<= 0:
-        return np.array([100])
-
-    inner_sqrt = (x)**(-2) - 2*(x)**(-1/3) +1
-    if inner_sqrt<=0:
-        return np.array([100])
-    
-
-    value_for_sqrt = (const.surface_ten/(const.gravity*1/(const.rho_water-const.rho_air)))*(x)**(-1/6)*np.sqrt(inner_sqrt) - radius
-
-
-    if value_for_sqrt<=0:
-        return np.array([100])
-
-    else:
-
-        ans = np.sqrt(value_for_sqrt)       
-        return np.array([ans])
-
-
-def reynolds_number(particle_speed, radius, local_air_density):
-    return particle_speed*2*radius*local_air_density*5  ##change 5 to viscosity once i have access to 1977 book
-
-
-def terminal_velocity(axis_ratio,radius, Re, fsa):
-
-    def drag_coefficient(Re, fsa):
-        """
-    Calculate the drag coefficient of a raindrop.
-
-    This function computes the drag coefficient based on the Reynolds number and a correction term for deviations from spherical shapes (Cshape).
-
-    Parameters
-    ----------
-    Re : float
-        Value of Reynolds number (dimensionless quantity to decribe fluid flow).
-    fsa : float
-        Ratio of surface area of oblate spheroid raindrop to surface area of sphere.
-    Cshape: float
-        Correction term for deviations from spherical shape
-
-    Returns
-    -------
-    float
-        Drag coefficient
-
-    Notes
-    -----
-    Equations taken from 
-    Loftus, K., & Wordsworth, R. D. (2021). The physics of falling raindrops in diverse planetary atmospheres.
-    Journal of Geophysical Research: Planets, 126, e2020JE006653. https://doi.org/10.1029/2020JE006653
-
-    """
-    Cshape = 1 + 1.5*(fsa-1)**0.5 + 6.7*(fsa-1)
-    drag = (24/Re*(1+0.15*Re**0.687) + 0.42*(1 + 4.25*10**4*Re**-1.16)**-1)*Cshape
-    return drag
-
-    drag = drag_coefficient(Re, fsa)
-
-    v = np.sqrt(
-        (8.0 /3.0)
-        *(CONST.rho_water - CONST.rho_air)
-        /(CONST.rho_air)
-        *CONST.gravity
-        /drag_coefficient(Re,fsa)
-        *(axis_ratio)**(2.0/3.0)
-        *radius)
-    return v
 
 
 def temp_strat(pressure: float) -> float:
@@ -423,40 +362,6 @@ def calculate_rpl(
 
     rpl = np.where(cond1, binbounds[:-1], np.where(cond2, binbounds[1:], other_values))
     return rpl
-
-
-def drag_coefficient(Re, fsa):
-    """
-    Calculate the drag coefficient of a raindrop.
-
-    This function computes the drag coefficient based on the Reynolds number and a correction term for deviations from spherical shapes (Cshape).
-
-    Parameters
-    ----------
-    Re : float
-        Value of Reynolds number (dimensionless quantity to decribe fluid flow).
-    fsa : float
-        Ratio of surface area of oblate spheroid raindrop to surface area of sphere.
-    Cshape: float
-        Correction term for deviations from spherical shape
-
-    Returns
-    -------
-    float
-        Drag coefficient
-
-    Notes
-    -----
-    Equations taken from
-    Loftus, K., & Wordsworth, R. D. (2021). The physics of falling raindrops in diverse planetary atmospheres.
-    Journal of Geophysical Research: Planets, 126, e2020JE006653. https://doi.org/10.1029/2020JE006653
-
-    """
-    Cshape = 1 + 1.5 * (fsa - 1) ** 0.5 + 6.7 * (fsa - 1)
-    ans = (
-        24 / Re * (1 + 0.15 * Re**0.687) + 0.42 * (1 + 4.25 * 10**4 * Re**-1.16) ** -1
-    ) * Cshape
-    return ans
 
 
 def stepgrow(
@@ -1033,60 +938,14 @@ def run_sim(sim_params: SimulationParameters, const: PhysicalConstants) -> dict:
     Parameters
     ----------
     sim_params : SimulationParameters
-        Simulation configuration containing:
-        - plume_base_temp : float
-            Initial plume temperature at surface [K]
-        - base_humidity_fraction : float
-            Relative humidity at plume base [dimensionless, 0-1]
-        - plume_base_radius : float
-            Initial radius of convective plume [m]
-        - temp_supercool : float
-            Supercooling threshold below freezing [K]
-        - water_collision_efficiency : float
-            Collision efficiency for liquid water droplets [dimensionless, 0-1]
-        - ice_collision_efficiency : float
-            Collision efficiency for ice particles [dimensionless, 0-1]
-        - start_pressure : float, optional
-            Initial pressure level [Pa], default 100000.0
-        - start_upward_velocity : float, optional
-            Initial vertical velocity [m/s], default 0.001
-        - pressure_step : float, optional
-            Pressure decrement per simulation step [Pa], default 10.0
-        - growth_time_step : float, optional
-            Time step for particle growth integration [s], default 0.01
-        - n_bins : int, optional
-            Number of particle size bins, default 31
-        - min_radius : float, optional
-            Minimum particle radius [m], default 1e-5
-        - max_radius : float, optional
-            Maximum particle radius [m], default 0.46340950011842
-        - flash_rate_sampling : int, optional
-            Sampling interval for flash rate calculation, default 10
+        Simulation configuration (see the YAML files in the config/ folder)
     const : PhysicalConstants
-        Container with physical constants
+        Container with physical constants (see the YAML files in the config/ folder)
 
     Returns
     -------
-    dict
-        Dictionary containing simulation results with the following keys:
-
-        pressure : np.ndarray
-            Pressure at each level [Pa], shape (n_steps,)
-        velocity : np.ndarray
-            Vertical velocity at each level [m/s], shape (n_steps,)
-        plume_temp : np.ndarray
-            Plume temperature (rising air) at each level [K], shape (n_steps,)
-        env_temp : np.ndarray
-            Environment temperature (falling air) at each level [K], shape (n_steps,)
-        flash_rate : np.ndarray
-            Lightning flash rate at sampled levels [flashes/s/km^2],
-            shape (n_steps // flash_rate_sampling,)
-        plume_radius : np.ndarray
-            Plume radius at each level [m], shape (n_steps,)
-        fs_rise : np.ndarray
-            Water vapor mass fraction in rising air [kg/kg], shape (n_steps,)
-        ls_rise : np.ndarray
-            Liquid/ice condensate mass fraction [kg/kg], shape (n_steps,)
+    CubeList
+        Iris CubeList containing selected diagnostics w.r.t. pressure.
 
     Notes
     -----
@@ -1131,6 +990,7 @@ def run_sim(sim_params: SimulationParameters, const: PhysicalConstants) -> dict:
     stepmax = int(
         sim_params.start_pressure / sim_params.pressure_step - sim_params.pressure_step
     )
+    rhrro = const.rhoro ** (1.0 / 3.0)
 
     Pressures = np.zeros(stepmax)
     Tempsrise = np.zeros(stepmax)
@@ -1143,16 +1003,17 @@ def run_sim(sim_params: SimulationParameters, const: PhysicalConstants) -> dict:
     binbounds = np.geomspace(
         sim_params.min_radius, sim_params.max_radius, sim_params.n_bins + 1
     )
-    rhrro = const.rhoro ** (1.0 / 3.0)
-    vrQQ = np.sqrt(
-        (8.0 / (3.0 * const.drag_coef))
-        * const.rho_water
-        * const.gravity
-        * const.universal_gas_constant
-        / const.molar_mass_dry_air
-    )
-
-    r0s = (binbounds[1:] + binbounds[:-1]) / 2.0
+    if sim_params.method_terminal_velocity == "aglyamov21":
+        vrQQ = np.sqrt(
+            (8.0 / (3.0 * const.drag_coef))
+            * const.rho_water
+            * const.gravity
+            * const.universal_gas_constant
+            / const.molar_mass_dry_air
+        )
+    elif sim_params.method_terminal_velocity == "loftus21":
+        r0s = (binbounds[1:] + binbounds[:-1]) / 2.0
+        wjQQ = np.zeros(sim_params.n_bins)
 
     # Initialize upbsin more efficiently
     upbsin = np.full(sim_params.n_bins, binbounds[0])
@@ -1182,8 +1043,6 @@ def run_sim(sim_params: SimulationParameters, const: PhysicalConstants) -> dict:
     lsrise = np.zeros(stepmax)
     Velocities = np.zeros(stepmax)
     Radii = np.zeros(stepmax)
-
-
 
     for i in range(stepmax):
         # Store current state
@@ -1294,16 +1153,31 @@ def run_sim(sim_params: SimulationParameters, const: PhysicalConstants) -> dict:
             else sim_params.ice_collision_efficiency * (rhrro**2),
         )
 
-        # Vectorized terminal velocity calculation
-        wjQQ = (
-            vrQQ
-            * np.sqrt(Trise / P)
-            / (
-                1.0
-                if Trisenew > (const.temp_freeze - sim_params.temp_supercool)
-                else rhrro
+        # Terminal velocity calculation
+        if sim_params.method_terminal_velocity == "aglyamov21":
+            wjQQ = (
+                vrQQ
+                * np.sqrt(Trise / P)
+                / (
+                    1.0
+                    if Trisenew > (const.temp_freeze - sim_params.temp_supercool)
+                    else rhrro
+                )
             )
-        )
+        elif sim_params.method_terminal_velocity == "loftus21":
+            air_dens = air_density(P, Trise, const=const)
+            surf_tens = liquid_surface_tension(Trise)
+            for i_bin, i_radius in enumerate(r0s):
+                wjQQ[i_bin] = (
+                    droplet_terminal_velocity(
+                        i_radius,
+                        air_dens=air_dens,
+                        liq_dens=const.rho_water,
+                        surf_tens=surf_tens,
+                        gravity=const.gravity,
+                    )
+                    / i_radius**0.5
+                )
 
         # Create meshgrid of bin indices
         ie, j = np.meshgrid(np.arange(sim_params.n_bins), np.arange(sim_params.n_bins))
@@ -1376,7 +1250,12 @@ def run_sim(sim_params: SimulationParameters, const: PhysicalConstants) -> dict:
                     )
 
             # Calculate critical size and update arrays
-            sizecrit = min((w / wjQQ) ** 2, binbounds[-1])
+            if sim_params.method_terminal_velocity == "aglyamov21":
+                sizecrit = min((w / wjQQ) ** 2, binbounds[-1])
+            else:
+                # TODO: adapt for the new terminal velocity calculation
+                sizecrit = (w / wjQQ) ** 2.0
+                print("sizecrit: ", sizecrit)
 
             # Calculate binsed using np.floor and max
             binsed = max(
@@ -1510,29 +1389,35 @@ def run_sim(sim_params: SimulationParameters, const: PhysicalConstants) -> dict:
         T = Tempsrise[i]
         w = Velocities[i]
 
-        # Vectorized wjQQ calculation
-        wjQQ = (
-            vrQQ
-            * np.sqrt(T / P)
-            / (1.0 if T > (const.temp_freeze - sim_params.temp_supercool) else rhrro)
-        )
+        # Terminal velocity calculation
+        if sim_params.method_terminal_velocity == "aglyamov21":
+            wjQQ = (
+                vrQQ
+                * np.sqrt(T / P)
+                / (
+                    1.0
+                    if T > (const.temp_freeze - sim_params.temp_supercool)
+                    else rhrro
+                )
+            )
+        elif sim_params.method_terminal_velocity == "loftus21":
+            r0s = (binbounds[1:] + binbounds[:-1]) / 2.0
+            air_dens = air_density(P, T, const=const)
+            surf_tens = liquid_surface_tension(T)
+            for i_bin, i_radius in enumerate(r0s):
+                wjQQ[i_bin] = (
+                    droplet_terminal_velocity(
+                        i_radius,
+                        air_dens=air_dens,
+                        liq_dens=const.rho_water,
+                        surf_tens=surf_tens,
+                        gravity=const.gravity,
+                    )
+                    / i_radius**0.5
+                )
 
         # Vectorized particle velocities
         velpart = w - wjQQ * np.sqrt(binbounds[:-1] * 1.1892)
-
-        # Array of terminal velocities using different radii
-        terminal_velocities = np.zeros(len(r0s))
-        for i, r in enumerate(r0s):
-        
-            particle_velocity = np.mean(velpart)
-            reynold = reynolds_number(particle_velocity, r, const.rho_air)
-    
-            finding_b_over_a = scipy.optimize.root(find_b_over_a, x0=0.10, args=(r,))
-            b_over_a = finding_b_over_a.x[0]
-            #print(b_over_a)
-
-            terminal_velocities[i] = terminal_velocity(b_over_a, r, reynold, 1)
-            #print('the terminal velocity is', terminal_velocities[i])
 
         # Vectorized calculation of rpl
         rpl = calculate_rpl(n0s, slopes, binbounds)

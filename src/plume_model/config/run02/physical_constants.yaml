@@ -72,13 +72,3 @@ physical_constants:
   pa_to_bar:
     value: 1.0e-5
     description: Conversion factor from Pascal to bar
-
-  surface_ten:
-    value: 0.00072
-    unit: N/m
-    description: Surface tension between liquid condensible and air
-
-  rho_air:
-    value: 1.293
-    unit: kg/m3
-    description: Density of liquid condensible
